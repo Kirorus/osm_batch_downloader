@@ -1,0 +1,16 @@
+services:
+  osm-batch-downloader:
+    build: .
+    container_name: osm-batch-downloader
+    ports:
+      - "8282:8000"
+    environment:
+      DATA_DIR: /data
+      OVERPASS_URL: https://maps.mail.ru/osm/tools/overpass/api/
+      HTTP_USER_AGENT: osm-batch-downloader/1.0
+      HTTP_TIMEOUT_SEC: "180"
+      DOWNLOAD_TIMEOUT_SEC: "1800"
+      OSM_LAND_POLYGONS_URLS: https://osmdata.openstreetmap.de/download/land-polygons-split-4326.zip
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

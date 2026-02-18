@@ -1,0 +1,21 @@
+{
+  "name": "osm-batch-downloader-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5176",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "maplibre-gl": "^4.7.1",
+    "svelte": "^4.2.19"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^3.0.2",
+    "svelte-preprocess": "^5.1.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.12"
+  }
+}

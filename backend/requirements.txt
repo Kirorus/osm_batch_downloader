@@ -1,0 +1,7 @@
+fastapi>=0.116
+uvicorn[standard]>=0.35
+requests>=2.32
+geopandas>=0.14
+shapely>=2.0
+fiona>=1.9
+pyproj>=3.6

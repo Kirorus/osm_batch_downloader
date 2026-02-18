@@ -1,0 +1,39 @@
+## Generated data / caches (do not commit)
+data/*
+!data/.gitkeep
+
+## Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.svelte-kit/
+frontend/.vite/
+
+## Backend / Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv/
+.venv/
+venv/
+ENV/
+env/
+
+## Logs / temp
+*.log
+*.tmp
+*.bak
+*.swp
+
+## OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+## Cursor / agent tooling (local)
+.cursor/
+.claude/
+
