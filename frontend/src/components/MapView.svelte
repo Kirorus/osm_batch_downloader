@@ -14,6 +14,7 @@
     scopeMode,
     visibleIds,
     overpassUrl,
+    fixAntimeridian,
     showOnlySelectedOnMap,
     previewLoadProgress,
     liveClipReadyEvent,
@@ -69,6 +70,7 @@
   let _scopeMode: "world" | "parent" = "world";
   let _visibleIds: number[] = [];
   let _overpassUrl = "";
+  let _fixAntimeridian = true;
   let _showOnlySelectedOnMap = false;
   let _basemapId = "";
   const appliedClipIds = new Set<number>();
@@ -242,6 +244,7 @@
           relation_ids: requestIds,
           admin_level: String(_adminLevel || "").trim() || null,
           parent_relation_id: _scopeMode === "parent" ? _parentRelationId : null,
+          fix_antimeridian: _fixAntimeridian,
           overpass_url: _overpassUrl.trim() || null,
         },
         signal,
@@ -538,6 +541,19 @@
     unsubs.push(scopeMode.subscribe((v) => { _scopeMode = v; }));
     unsubs.push(visibleIds.subscribe((v) => { _visibleIds = v; scheduleEnsure(); }));
     unsubs.push(overpassUrl.subscribe((v) => { _overpassUrl = v; }));
+    unsubs.push(fixAntimeridian.subscribe((v) => {
+      const next = Boolean(v);
+      const changed = next !== _fixAntimeridian;
+      _fixAntimeridian = next;
+      if (changed) {
+        fetchAbort?.abort();
+        inFlightGeomIds.clear();
+        failedGeomRetryUntil.clear();
+        geomById.clear();
+        appliedClipIds.clear();
+        scheduleEnsure();
+      }
+    }));
     unsubs.push(showOnlySelectedOnMap.subscribe((v) => { _showOnlySelectedOnMap = v; scheduleEnsure(); }));
     unsubs.push(basemapId.subscribe((v) => {
       _basemapId = String(v || "").trim();

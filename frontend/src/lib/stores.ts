@@ -124,6 +124,7 @@ export const parentAdminLevel = writable("2");
 export const parentCandidates = writable<AreaItem[]>([]);
 export const clipLand = writable(Boolean(lsGet("clipLand", false)));
 export const forceRefreshOsmSource = writable(Boolean(lsGet("forceRefreshOsmSource", false)));
+export const fixAntimeridian = writable(Boolean(lsGet("fixAntimeridian", true)));
 export const overpassUrl = writable(String(lsGet("overpassUrl", "") || ""));
 export const showOnlySelectedOnMap = writable(Boolean(lsGet("showOnlySelectedOnMap", false)));
 export const basemapId = writable(String(lsGet("basemapId", DEFAULT_BASEMAP_ID) || DEFAULT_BASEMAP_ID));
@@ -472,6 +473,7 @@ export async function startJob() {
       relation_names: relationNames,
       clip_land: get(clipLand),
       force_refresh_osm_source: get(forceRefreshOsmSource),
+      fix_antimeridian: get(fixAntimeridian),
       overpass_url: get(overpassUrl).trim() || null,
     });
     jobId.set(res.job_id);
@@ -566,6 +568,7 @@ export function resetSavedSession() {
   parentCandidates.set([]);
   clipLand.set(false);
   forceRefreshOsmSource.set(false);
+  fixAntimeridian.set(true);
   overpassUrl.set("");
   showOnlySelectedOnMap.set(false);
   basemapId.set(DEFAULT_BASEMAP_ID);
@@ -594,6 +597,7 @@ parentRelationName.subscribe((v) => lsSet("parentRelationName", v));
 parentQuery.subscribe((v) => lsSet("parentQuery", v));
 clipLand.subscribe((v) => lsSet("clipLand", v));
 forceRefreshOsmSource.subscribe((v) => lsSet("forceRefreshOsmSource", v));
+fixAntimeridian.subscribe((v) => lsSet("fixAntimeridian", v));
 overpassUrl.subscribe((v) => lsSet("overpassUrl", v));
 showOnlySelectedOnMap.subscribe((v) => lsSet("showOnlySelectedOnMap", v));
 basemapId.subscribe((v) => lsSet("basemapId", v));

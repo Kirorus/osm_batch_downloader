@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from shapely.geometry import mapping, shape
+from shapely.ops import transform, unary_union
 
 from batch_downloader.services.land_polygons import download_land_polygons, load_land_union_for_bbox
 from batch_downloader.services.osm_geometry import build_relation_geometry
@@ -45,6 +46,56 @@ def _relation_fetch_query(relation_id: int, timeout_sec: int, *, with_geom: bool
 def _geom_bbox(geom) -> tuple[float, float, float, float]:
     minx, miny, maxx, maxy = geom.bounds
     return float(minx), float(miny), float(maxx), float(maxy)
+
+
+def _geom_uses_360_domain(geom: Any) -> bool:
+    try:
+        _minx, _miny, maxx, _maxy = geom.bounds
+        return float(maxx) > 180.0
+    except Exception:
+        return False
+
+
+def _shift_geometry_180_to_360(geom: Any) -> Any:
+    def _fn(x, y, z=None):
+        nx = x + 360.0 if x < 0.0 else x
+        if z is None:
+            return nx, y
+        return nx, y, z
+
+    return transform(_fn, geom)
+
+
+def _load_land_union_for_clip_geom(geom: Any, *, bbox_pad_deg: float = 1.0):
+    minx, miny, maxx, maxy = _geom_bbox(geom)
+
+    # Standard lon domain, no special handling needed.
+    if maxx <= 180.0:
+        return load_land_union_for_bbox((minx, miny, maxx, maxy), bbox_pad_deg=bbox_pad_deg)
+
+    # Geometry is in 0..360 domain.
+    if minx >= 180.0:
+        wrapped_union, cache_hit = load_land_union_for_bbox(
+            (minx - 360.0, miny, maxx - 360.0, maxy),
+            bbox_pad_deg=bbox_pad_deg,
+        )
+        return _shift_geometry_180_to_360(wrapped_union), cache_hit
+
+    # Straddles 180 in 0..360 domain: query both sides and stitch.
+    left_union, left_hit = load_land_union_for_bbox(
+        (minx, miny, 180.0, maxy),
+        bbox_pad_deg=bbox_pad_deg,
+    )
+    right_union, right_hit = load_land_union_for_bbox(
+        (-180.0, miny, maxx - 360.0, maxy),
+        bbox_pad_deg=bbox_pad_deg,
+    )
+    right_shifted = _shift_geometry_180_to_360(right_union)
+    try:
+        combined = unary_union([left_union, right_shifted])
+    except Exception:
+        combined = left_union.union(right_shifted)
+    return combined, bool(left_hit and right_hit)
 
 
 def _tags_from_preview_properties(props: dict[str, Any]) -> dict[str, Any]:
@@ -135,6 +186,7 @@ def download_admin_boundaries(
     relation_names: dict[str, str] | None = None,
     clip_land: bool,
     force_refresh_osm_source: bool = False,
+    fix_antimeridian: bool = True,
     overpass_url: str | None,
     emit: callable,
     should_cancel: callable | None = None,
@@ -152,6 +204,18 @@ def download_admin_boundaries(
                     "OSM source cache mode: force refresh (ignore cached object files)"
                     if force_refresh_osm_source
                     else "OSM source cache mode: reuse cached object files when valid"
+                )
+            },
+        )
+    )
+    emit(
+        JobEvent(
+            "log",
+            {
+                "message": (
+                    "Anti-meridian fix: enabled (0..360 mode)"
+                    if fix_antimeridian
+                    else "Anti-meridian fix: disabled"
                 )
             },
         )
@@ -212,7 +276,11 @@ def download_admin_boundaries(
                 used_elapsed = 0.0
                 t_fetch = time.time() - t_fetch0
             else:
-                cached = get_cached_preview_feature(rid, overpass_url=overpass_url)
+                cached = get_cached_preview_feature(
+                    rid,
+                    overpass_url=overpass_url,
+                    fix_antimeridian=fix_antimeridian,
+                )
                 if cached is not None:
                     emit(JobEvent("object_phase", {"relation_id": rid, "phase": "use_preview_cache"}))
                     props = cached.get("properties") if isinstance(cached.get("properties"), dict) else {}
@@ -252,7 +320,11 @@ def download_admin_boundaries(
                     tags = rel_el.get("tags") if isinstance(rel_el, dict) and isinstance(rel_el.get("tags"), dict) else {}
                     emit(JobEvent("object_phase", {"relation_id": rid, "phase": "build_geometry"}))
                     t_build0 = time.time()
-                    geom = build_relation_geometry([e for e in elements if isinstance(e, dict)], rid)
+                    geom = build_relation_geometry(
+                        [e for e in elements if isinstance(e, dict)],
+                        rid,
+                        fix_antimeridian=fix_antimeridian,
+                    )
                     t_build = time.time() - t_build0
 
                 # Prefer fresh/fetched tags when available, otherwise fallback to preloaded details.
@@ -280,6 +352,10 @@ def download_admin_boundaries(
                 emit(JobEvent("object_phase", {"relation_id": rid, "phase": "clip_land"}))
                 t_clip0 = time.time()
                 can_reuse_land_object = bool(osm_reused_from_cache and not force_refresh_osm_source)
+                if can_reuse_land_object and fix_antimeridian and _geom_uses_360_domain(geom):
+                    # Older cached land_only files may have been clipped in a mismatched lon domain.
+                    # Recompute for 0..360 anti-meridian objects to avoid truncated geometry.
+                    can_reuse_land_object = False
                 land_cached = _load_cached_land_object(p.land_objects_dir, rid) if can_reuse_land_object else None
                 if land_cached is not None:
                     emit(JobEvent("object_phase", {"relation_id": rid, "phase": "use_land_only_cache"}))
@@ -294,8 +370,7 @@ def download_admin_boundaries(
                     t_clip = time.time() - t_clip0
                 else:
                     land_object_cache_misses += 1
-                    bbox = _geom_bbox(geom)
-                    land_union, cache_hit = load_land_union_for_bbox(bbox, bbox_pad_deg=1.0)
+                    land_union, cache_hit = _load_land_union_for_clip_geom(geom, bbox_pad_deg=1.0)
                     if cache_hit:
                         clip_cache_hits += 1
                     else:

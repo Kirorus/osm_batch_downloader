@@ -200,6 +200,7 @@ class JobManager:
                 relation_names=job.params.get("relation_names"),
                 clip_land=bool(job.params["clip_land"]),
                 force_refresh_osm_source=bool(job.params.get("force_refresh_osm_source", False)),
+                fix_antimeridian=bool(job.params.get("fix_antimeridian", True)),
                 overpass_url=job.params.get("overpass_url"),
                 emit=_emit,
                 should_cancel=_should_cancel,

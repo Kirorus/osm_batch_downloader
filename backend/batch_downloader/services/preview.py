@@ -35,18 +35,19 @@ def _cache_root() -> Path:
     return settings.cache_dir / "preview"
 
 
-def _cache_key(overpass_url: str | None) -> str:
+def _cache_key(overpass_url: str | None, fix_antimeridian: bool) -> str:
     src = str(overpass_url or settings.overpass_url).strip().lower()
     endpoint_key = hashlib.sha1(src.encode("utf-8")).hexdigest()[:12]
-    return f"op_{endpoint_key}"
+    mode_key = "am1" if fix_antimeridian else "am0"
+    return f"op_{endpoint_key}_{mode_key}"
 
 
-def _cache_file(relation_id: int, overpass_url: str | None) -> Path:
-    return _cache_root() / _cache_key(overpass_url) / f"r{int(relation_id)}.json"
+def _cache_file(relation_id: int, overpass_url: str | None, fix_antimeridian: bool) -> Path:
+    return _cache_root() / _cache_key(overpass_url, fix_antimeridian) / f"r{int(relation_id)}.json"
 
 
-def _load_cached_feature(relation_id: int, overpass_url: str | None) -> dict[str, Any] | None:
-    p = _cache_file(relation_id, overpass_url)
+def _load_cached_feature(relation_id: int, overpass_url: str | None, fix_antimeridian: bool) -> dict[str, Any] | None:
+    p = _cache_file(relation_id, overpass_url, fix_antimeridian)
     if not p.exists():
         return None
     try:
@@ -69,8 +70,13 @@ def _load_cached_feature(relation_id: int, overpass_url: str | None) -> dict[str
     }
 
 
-def _save_cached_feature(feature: dict[str, Any], relation_id: int, overpass_url: str | None) -> None:
-    p = _cache_file(relation_id, overpass_url)
+def _save_cached_feature(
+    feature: dict[str, Any],
+    relation_id: int,
+    overpass_url: str | None,
+    fix_antimeridian: bool,
+) -> None:
+    p = _cache_file(relation_id, overpass_url, fix_antimeridian)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(feature), encoding="utf-8")
@@ -149,11 +155,16 @@ def land_preview_features(
     return {"type": "FeatureCollection", "features": feats}
 
 
-def get_cached_preview_feature(relation_id: int, *, overpass_url: str | None = None) -> dict[str, Any] | None:
+def get_cached_preview_feature(
+    relation_id: int,
+    *,
+    overpass_url: str | None = None,
+    fix_antimeridian: bool = True,
+) -> dict[str, Any] | None:
     """
     Public helper for other services (e.g. export) to reuse preview geometry cache.
     """
-    return _load_cached_feature(int(relation_id), overpass_url)
+    return _load_cached_feature(int(relation_id), overpass_url, bool(fix_antimeridian))
 
 
 def preview_features(
@@ -161,6 +172,7 @@ def preview_features(
     *,
     adm_name: str | None = None,
     admin_level: str | None = None,
+    fix_antimeridian: bool = True,
     overpass_url: str | None = None,
     timeout_sec: int = 180,
 ) -> dict[str, Any]:
@@ -174,10 +186,11 @@ def preview_features(
     scope_al = str(admin_level or "").strip()
     target_cache = f"osm_source objects ({scope_name}/admin_level={scope_al})" if scoped else "preview cache files"
     logger.info(
-        "preview_features start: ids=%d, target_cache=%s, overpass_url=%s",
+        "preview_features start: ids=%d, target_cache=%s, overpass_url=%s, fix_antimeridian=%s",
         len(ids),
         target_cache,
         str(overpass_url or settings.overpass_url).strip(),
+        bool(fix_antimeridian),
     )
 
     missing_ids: list[int] = []
@@ -191,7 +204,7 @@ def preview_features(
                 feats.append(scoped_cached)
                 hit_scoped += 1
                 continue
-        cached = _load_cached_feature(rid, overpass_url)
+        cached = _load_cached_feature(rid, overpass_url, bool(fix_antimeridian))
         if cached is not None:
             feats.append(cached)
             hit_preview_cache += 1
@@ -261,7 +274,7 @@ def preview_features(
                 )
                 tags = rel_el.get("tags") if isinstance(rel_el, dict) and isinstance(rel_el.get("tags"), dict) else {}
                 name = preferred_name_from_tags(tags) or f"relation {int(rid)}"
-                geom = build_relation_geometry(elements, int(rid))
+                geom = build_relation_geometry(elements, int(rid), fix_antimeridian=bool(fix_antimeridian))
                 feature = {
                     "type": "Feature",
                     "id": int(rid),
@@ -289,7 +302,7 @@ def preview_features(
                     except Exception:
                         pass
                 else:
-                    _save_cached_feature(feature, int(rid), overpass_url)
+                    _save_cached_feature(feature, int(rid), overpass_url, bool(fix_antimeridian))
             except Exception:
                 continue
     logger.info(

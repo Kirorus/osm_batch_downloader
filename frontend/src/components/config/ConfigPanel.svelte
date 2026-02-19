@@ -9,6 +9,7 @@
     overpassUrl,
     showOnlySelectedOnMap,
     forceRefreshOsmSource,
+    fixAntimeridian,
     worldScopeAllowed,
     allIds,
     loadIds,
@@ -126,8 +127,11 @@
       <div class="field">
         <Toggle bind:checked={$forceRefreshOsmSource} label="Force refresh osm_source (ignore cached object files)" />
       </div>
+      <div class="field">
+        <Toggle bind:checked={$fixAntimeridian} label="Fix anti-meridian split (180°)" />
+      </div>
       <div class="hint">
-        Geometry preview is loaded only for selected objects. For very large selections, map preview falls back to bbox for stability.
+        Geometry preview is loaded only for selected objects. For very large selections, map preview falls back to bbox for stability. Anti-meridian fix uses 0..360 longitude mode.
       </div>
     </div>
   {/if}

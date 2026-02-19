@@ -30,6 +30,7 @@ class CatalogPreviewRequest(BaseModel):
     relation_ids: list[int] = Field(default_factory=list)
     admin_level: str | None = None
     parent_relation_id: int | None = None
+    fix_antimeridian: bool = True
     overpass_url: str | None = None
 
 
@@ -46,6 +47,7 @@ class CreateJobRequest(BaseModel):
     relation_names: dict[str, str] = Field(default_factory=dict)
     clip_land: bool = False
     force_refresh_osm_source: bool = False
+    fix_antimeridian: bool = True
     overpass_url: str | None = None
 
 
@@ -136,6 +138,7 @@ async def api_catalog_preview(body: CatalogPreviewRequest) -> dict[str, Any]:
             ids,
             adm_name=preview_adm_name,
             admin_level=preview_admin_level,
+            fix_antimeridian=bool(body.fix_antimeridian),
             overpass_url=body.overpass_url,
         )
         return fc
@@ -200,6 +203,7 @@ async def api_create_job(body: CreateJobRequest) -> dict[str, Any]:
         "relation_names": body.relation_names,
         "clip_land": bool(body.clip_land),
         "force_refresh_osm_source": bool(body.force_refresh_osm_source),
+        "fix_antimeridian": bool(body.fix_antimeridian),
         "overpass_url": body.overpass_url,
     }
     job = await job_manager.create_job(params)
