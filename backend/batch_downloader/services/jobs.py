@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from batch_downloader.services.downloader import JobEvent, download_admin_boundaries
+
+logger = logging.getLogger(__name__)
+
+# Finished jobs are kept for a grace period so clients can poll status / read
+# the SSE stream after completion.  After that they become eligible for eviction.
+_FINISHED_JOB_GRACE_SEC = 600  # 10 minutes
+_MAX_FINISHED_JOBS = 50
+
+
+_TERMINAL_STATUSES = frozenset({"done", "error", "cancelled"})
 
 
 @dataclass
@@ -21,6 +32,11 @@ class Job:
     error: str | None = None
     cancelled: bool = False
     task: asyncio.Task | None = None
+    finished_at_epoch: float | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in _TERMINAL_STATUSES
 
     def emit(self, ev: JobEvent) -> None:
         if ev.type == "overall_progress":
@@ -38,6 +54,7 @@ class JobManager:
 
     async def create_job(self, params: dict[str, Any]) -> Job:
         async with self._lock:
+            self._evict_finished_jobs()
             job_id = uuid.uuid4().hex
             job = Job(job_id=job_id, created_at_epoch=time.time(), params=params)
             self._jobs[job_id] = job
@@ -54,6 +71,48 @@ class JobManager:
         job.request_cancel()
         job.emit(JobEvent("log", {"message": "Cancel requested"}))
         return True
+
+    # ------------------------------------------------------------------
+    # Eviction of finished jobs to prevent unbounded memory growth.
+    # Called under self._lock from create_job so it runs on every new job.
+    # ------------------------------------------------------------------
+
+    def _evict_finished_jobs(self) -> None:
+        now = time.time()
+        finished: list[tuple[str, Job]] = [
+            (jid, j) for jid, j in self._jobs.items()
+            if j.is_terminal
+        ]
+        if not finished:
+            return
+
+        # 1. Remove jobs that exceeded the grace period.
+        expired = [
+            jid for jid, j in finished
+            if j.finished_at_epoch is not None
+            and (now - j.finished_at_epoch) > _FINISHED_JOB_GRACE_SEC
+        ]
+        for jid in expired:
+            del self._jobs[jid]
+
+        # 2. If still too many finished jobs, evict the oldest ones.
+        evicted_over_limit = 0
+        remaining_finished = [
+            (jid, j) for jid, j in self._jobs.items()
+            if j.is_terminal
+        ]
+        if len(remaining_finished) > _MAX_FINISHED_JOBS:
+            remaining_finished.sort(key=lambda x: x[1].finished_at_epoch or x[1].created_at_epoch)
+            evicted_over_limit = len(remaining_finished) - _MAX_FINISHED_JOBS
+            for jid, _ in remaining_finished[:evicted_over_limit]:
+                del self._jobs[jid]
+
+        total_evicted = len(expired) + evicted_over_limit
+        if total_evicted:
+            logger.debug(
+                "Evicted %d finished jobs (%d expired, %d over limit)",
+                total_evicted, len(expired), evicted_over_limit,
+            )
 
     async def _run(self, job: Job) -> None:
         job.status = "running"
@@ -87,6 +146,7 @@ class JobManager:
             job.error = str(exc)
             job.emit(JobEvent("error", {"message": str(exc)}))
         finally:
+            job.finished_at_epoch = time.time()
             job.emit(JobEvent("job_finished", {"job_id": job.job_id, "status": job.status}))
 
 
