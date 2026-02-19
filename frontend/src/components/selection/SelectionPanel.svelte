@@ -194,7 +194,7 @@
         {#if $previewLoadProgress.isLoading || $previewLoadProgress.inflight > 0 || $previewLoadProgress.pending > 0}
           <LoadingSpinner size={14} />
           <span>
-            Loading selected previews...
+            Loading preview geometries...
             {$previewLoadProgress.loaded} / {$previewLoadProgress.selectedTotal}
             {#if $previewLoadProgress.inflight > 0}
               (in flight: {$previewLoadProgress.inflight})
@@ -202,7 +202,7 @@
           </span>
         {:else}
           <span>
-            Selected previews ready: {$previewLoadProgress.loaded} / {$previewLoadProgress.selectedTotal}
+            Preview geometries ready: {$previewLoadProgress.loaded} / {$previewLoadProgress.selectedTotal}
           </span>
         {/if}
       </div>

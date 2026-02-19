@@ -127,7 +127,7 @@
         <Toggle bind:checked={$forceRefreshOsmSource} label="Force refresh osm_source (ignore cached object files)" />
       </div>
       <div class="hint">
-        Geometry preview is loaded only for selected objects. Others stay as bbox for faster browsing.
+        Geometry preview is loaded only for selected objects. For very large selections, map preview falls back to bbox for stability.
       </div>
     </div>
   {/if}

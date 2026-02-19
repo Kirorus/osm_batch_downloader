@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 # the SSE stream after completion.  After that they become eligible for eviction.
 _FINISHED_JOB_GRACE_SEC = 600  # 10 minutes
 _MAX_FINISHED_JOBS = 50
+_SSE_QUEUE_MAX = 1024
+_COALESCE_EVENT_TYPES = frozenset({"overall_progress", "land_polygons_download_progress", "clip_cache_stats"})
 
 
 _TERMINAL_STATUSES = frozenset({"done", "error", "cancelled"})
@@ -26,13 +28,16 @@ class Job:
     job_id: str
     created_at_epoch: float
     params: dict[str, Any]
-    queue: asyncio.Queue[JobEvent] = field(default_factory=asyncio.Queue)
+    queue: asyncio.Queue[JobEvent] = field(default_factory=lambda: asyncio.Queue(maxsize=_SSE_QUEUE_MAX))
     status: str = "queued"  # queued|running|done|error|cancelled
     progress: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     cancelled: bool = False
     task: asyncio.Task | None = None
     finished_at_epoch: float | None = None
+    pending_coalesced: dict[str, JobEvent] = field(default_factory=dict)
+    queued_coalesced_types: set[str] = field(default_factory=set)
+    dropped_events: int = 0
 
     @property
     def is_terminal(self) -> bool:
@@ -41,7 +46,67 @@ class Job:
     def emit(self, ev: JobEvent) -> None:
         if ev.type == "overall_progress":
             self.progress = ev.data
-        self.queue.put_nowait(ev)
+        if ev.type in _COALESCE_EVENT_TYPES:
+            # Keep at most one queued snapshot per noisy progress event type.
+            if ev.type in self.queued_coalesced_types:
+                self.pending_coalesced[ev.type] = ev
+                return
+            if self._enqueue_with_backpressure(ev):
+                self.queued_coalesced_types.add(ev.type)
+            else:
+                self.pending_coalesced[ev.type] = ev
+            return
+
+        self._enqueue_with_backpressure(ev)
+
+    def on_event_delivered(self, ev: JobEvent) -> None:
+        if ev.type in _COALESCE_EVENT_TYPES:
+            self.queued_coalesced_types.discard(ev.type)
+            self.flush_coalesced_events()
+
+    def flush_coalesced_events(self) -> None:
+        if not self.pending_coalesced:
+            return
+        for ev_type in list(self.pending_coalesced.keys()):
+            if ev_type in self.queued_coalesced_types:
+                continue
+            ev = self.pending_coalesced.get(ev_type)
+            if ev is None:
+                continue
+            if not self._enqueue_with_backpressure(ev):
+                break
+            self.queued_coalesced_types.add(ev_type)
+            self.pending_coalesced.pop(ev_type, None)
+
+    def _enqueue_with_backpressure(self, ev: JobEvent) -> bool:
+        if not self.queue.full():
+            self.queue.put_nowait(ev)
+            return True
+
+        # Drop the oldest queued event to keep memory bounded.
+        dropped: JobEvent | None = None
+        try:
+            dropped = self.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            dropped = None
+
+        if dropped is not None:
+            self.dropped_events += 1
+            if dropped.type in _COALESCE_EVENT_TYPES:
+                self.queued_coalesced_types.discard(dropped.type)
+            if self.dropped_events in {1, 10, 100} or self.dropped_events % 1000 == 0:
+                logger.warning(
+                    "SSE queue overflow for job %s: dropped events=%d",
+                    self.job_id,
+                    self.dropped_events,
+                )
+
+        try:
+            self.queue.put_nowait(ev)
+            return True
+        except asyncio.QueueFull:
+            self.dropped_events += 1
+            return False
 
     def request_cancel(self) -> None:
         self.cancelled = True
@@ -147,10 +212,22 @@ class JobManager:
             job.emit(JobEvent("error", {"message": str(exc)}))
         finally:
             job.finished_at_epoch = time.time()
+            if job.dropped_events:
+                job.emit(
+                    JobEvent(
+                        "log",
+                        {
+                            "message": (
+                                "SSE backpressure: dropped "
+                                f"{int(job.dropped_events)} old queued event(s) to keep memory bounded"
+                            )
+                        },
+                    )
+                )
+            job.flush_coalesced_events()
             job.emit(JobEvent("job_finished", {"job_id": job.job_id, "status": job.status}))
 
 
 def sse_format(ev: JobEvent) -> str:
     payload = json.dumps(ev.data, ensure_ascii=False)
     return f"event: {ev.type}\ndata: {payload}\n\n"
-

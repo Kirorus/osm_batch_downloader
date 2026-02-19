@@ -36,6 +36,11 @@
   const selectedColor = "#3b82f6";
   const dimColor = "#64748b";
   const hoverColor = "#38bdf8";
+  const MAX_DETAILED_PREVIEW_GEOMS = 300;
+  // High-fidelity preview geometry; OOM protection is handled by the detailed-geometry cap.
+  const AREAS_SOURCE_MAXZOOM = 18;
+  const AREAS_SOURCE_TOLERANCE = 0.1;
+  const AREAS_SOURCE_BUFFER = 128;
 
   const geomById = new Map<number, Feature>();
   let renderCount = 0;
@@ -111,12 +116,37 @@
     return Array.from(s);
   }
 
+  function detailedPreviewTargetIds(includeHover = false): number[] {
+    const ids = new Set<number>();
+    let selectedCount = 0;
+    for (const id of _selected) {
+      ids.add(id);
+      selectedCount += 1;
+      if (selectedCount >= MAX_DETAILED_PREVIEW_GEOMS) break;
+    }
+    if (includeHover && hoveredId !== null) ids.add(hoveredId);
+    return Array.from(ids);
+  }
+
+  function pruneGeometryCache(keepIds: Set<number>) {
+    for (const id of Array.from(geomById.keys())) {
+      if (!keepIds.has(id)) geomById.delete(id);
+    }
+  }
+
   function buildFeatureCollection() {
     const ids = computeRenderIds();
+    const detailedIds = new Set<number>(detailedPreviewTargetIds(true));
+    pruneGeometryCache(detailedIds);
     const features: Feature[] = [];
     for (const id of ids) {
-      const geom = geomById.get(id);
-      if (geom) { features.push(geom); continue; }
+      if (detailedIds.has(id)) {
+        const geom = geomById.get(id);
+        if (geom) {
+          features.push(geom);
+          continue;
+        }
+      }
       const bb = bboxFeature(id);
       if (bb) features.push(bb);
     }
@@ -149,7 +179,7 @@
   }
 
   function updatePreviewLoadProgress(isLoading: boolean) {
-    const selectedIds = Array.from(_selected);
+    const selectedIds = detailedPreviewTargetIds();
     const selectedTotal = selectedIds.length;
     let loaded = 0;
     let inflight = 0;
@@ -163,8 +193,9 @@
 
   function wantedGeomIds(): number[] {
     // Preview mode: fetch real geometry only for selected objects.
+    // For very large selections we keep only a bounded number of detailed geometries in memory.
     const now = Date.now();
-    return Array.from(_selected).filter((id) => {
+    return detailedPreviewTargetIds().filter((id) => {
       const retryAt = failedGeomRetryUntil.get(id) || 0;
       return retryAt <= now;
     });
@@ -306,10 +337,12 @@
           parent_relation_id: _scopeMode === "parent" ? _parentRelationId : null,
         });
         const feats = Array.isArray(fc?.features) ? fc.features : [];
+        const detailedIds = new Set<number>(detailedPreviewTargetIds(true));
         const updatedIds: number[] = [];
         for (const f of feats) {
           const rid = Number(f?.id ?? f?.properties?.relation_id ?? f?.properties?.osm_id);
           if (!rid || Number.isNaN(rid)) continue;
+          if (!detailedIds.has(rid)) continue;
           const prev = geomById.get(rid);
           geomById.set(rid, {
             type: "Feature",
@@ -542,6 +575,9 @@
       map!.addSource("areas", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
+        maxzoom: AREAS_SOURCE_MAXZOOM,
+        tolerance: AREAS_SOURCE_TOLERANCE,
+        buffer: AREAS_SOURCE_BUFFER,
       });
       source = map!.getSource("areas") as GeoJSONSource;
 

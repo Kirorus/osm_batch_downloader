@@ -7,10 +7,12 @@ from collections import OrderedDict
 from math import ceil, floor
 from pathlib import Path
 from typing import Any, Callable
+import threading
 
 import geopandas as gpd
 import requests
 from shapely.geometry import box
+from requests.adapters import HTTPAdapter
 
 from batch_downloader.settings import settings
 
@@ -23,6 +25,19 @@ _LAND_UNION_CACHE_MAX = 96
 _BBOX_TILE_DEG = 5.0
 _land_union_cache: "OrderedDict[tuple[int, int, int, int, int], Any]" = OrderedDict()
 _land_geometry_store: gpd.GeoDataFrame | None = None
+_SESSION_LOCAL = threading.local()
+
+
+def _get_http_session() -> requests.Session:
+    session = getattr(_SESSION_LOCAL, "session", None)
+    if session is not None:
+        return session
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=0)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    _SESSION_LOCAL.session = session
+    return session
 
 
 def _resolve_shapefile_in_zip(zip_path: Path) -> str:
@@ -68,12 +83,13 @@ def download_land_polygons(
         return dst
 
     urls = settings.osm_land_polygons_urls or []
+    session = _get_http_session()
     last_error: Exception | None = None
     for url in urls:
         try:
             tmp = dst.with_suffix(dst.suffix + ".tmp")
             t0 = time.time()
-            with requests.get(url, stream=True, timeout=float(settings.download_timeout_sec)) as r:
+            with session.get(url, stream=True, timeout=float(settings.download_timeout_sec)) as r:
                 r.raise_for_status()
                 total = r.headers.get("Content-Length")
                 total_i = int(total) if total and total.isdigit() else None

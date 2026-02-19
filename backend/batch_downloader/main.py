@@ -239,12 +239,15 @@ async def api_events(job_id: str) -> StreamingResponse:
     async def gen():
         yield "event: hello\ndata: {}\n\n"
         while True:
+            job.flush_coalesced_events()
             try:
                 ev = await asyncio.wait_for(job.queue.get(), timeout=15.0)
+                job.on_event_delivered(ev)
                 yield sse_format(ev)
                 if ev.type == "job_finished":
                     break
             except asyncio.TimeoutError:
+                job.flush_coalesced_events()
                 yield "event: ping\ndata: {}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")

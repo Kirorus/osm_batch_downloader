@@ -6,7 +6,9 @@ from typing import Any
 
 import requests
 import re
+import threading
 from urllib.parse import urlparse
+from requests.adapters import HTTPAdapter
 
 from batch_downloader.settings import settings
 
@@ -20,6 +22,21 @@ class OverpassResult:
 
 class OverpassError(RuntimeError):
     pass
+
+
+_SESSION_LOCAL = threading.local()
+
+
+def _get_http_session() -> requests.Session:
+    session = getattr(_SESSION_LOCAL, "session", None)
+    if session is not None:
+        return session
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16, max_retries=0)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    _SESSION_LOCAL.session = session
+    return session
 
 
 def _normalize_overpass_endpoint(url: str) -> str:
@@ -63,13 +80,14 @@ def post_overpass(query: str, *, preferred_url: str | None = None, timeout_sec: 
 
     headers = {"User-Agent": settings.http_user_agent}
     timeout = float(timeout_sec or settings.http_timeout_sec)
+    session = _get_http_session()
 
     last_error: Exception | None = None
     for url in urls:
         t0 = time.time()
         try:
             # Use form-encoded "data=" which is supported by Overpass and works with more proxies.
-            resp = requests.post(url, data={"data": query}, headers=headers, timeout=timeout)
+            resp = session.post(url, data={"data": query}, headers=headers, timeout=timeout)
             elapsed = time.time() - t0
             if resp.status_code != 200:
                 html_msg = _extract_osm3s_error(resp.text)
